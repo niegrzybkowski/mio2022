@@ -7,24 +7,109 @@ import matplotlib.pyplot as plt
 def MSE(x, y):
     return np.sum((x - y)**2) / len(x)
 
+def CCE(yhat, y):
+    y_pos = np.argmax(y != 0.0, axis=1)
+    return -np.mean(np.log(yhat[y_pos]))
+
+def macro_f1(yhat, y):
+    contingency_matrix = ohe(yhat).T @ ohe(y)
+    f1 = []
+    for i in range(contingency_matrix.shape[0]):
+        correct   = contingency_matrix[i,i]
+        precision = correct / np.sum(contingency_matrix[i, :])
+        recall    = correct / np.sum(contingency_matrix[:, i])
+        f1_score  = 2*(precision * recall) / (precision + recall)
+        f1.append(f1_score)
+    return sum(f1)/len(f1)
+
+def ohe_one(which, length):
+    out = np.zeros(shape=(length))
+    out[which] = 1.0
+    return out
+    
+def ohe(y):
+    length = len(np.unique(y))
+    return np.array([ohe_one(el, length) for el in y])
+
+def rohe(y):
+    return np.argmax(y, axis=1)
+
+class Loss:
+    def __init__(self) -> None:
+        pass
+
+    def f(self, yhat, y):
+        pass
+    
+    def df(self, x, y):
+        pass
+
+class MSELoss(Loss):
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def f(self, yhat, y):
+        return np.sum((yhat - y)**2) / len(yhat)
+    
+    def df(self, yhat, y):
+        return (yhat - y)
+
+class CCESoftMaxLoss(Loss):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def f(self, yhat, y):
+        y_pos = np.argmax(y != 0.0)
+        return - np.log(yhat[y_pos])
+
+    def df(self, yhat, y):
+        return yhat - y
+
 class Activation:
     def __init__(self):
-        self.f = None
-        self.df = None
+        pass
+
+    def f(self, x):
+        pass
+
+    def df(self, x):
+        pass
 
 class SigmoidActivation(Activation):
     def __init__(self):
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
-        def grad_sigmoid(x):
-            return sigmoid(x) * (1 - sigmoid(x))
-        self.f = sigmoid
-        self.df = grad_sigmoid
+        pass
+
+    def f(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def df(self, x):
+        sigx = self.f(x)
+        return sigx * (1 - sigx)
 
 class LinearActivation(Activation):
     def __init__(self):
-        self.f = lambda x: x
-        self.df = lambda x: 1
+        pass
+
+    def f(self, x):
+        return x
+
+    def df(self, x):
+        return 1
+
+class SoftmaxActivation(Activation):
+    def __init__(self):
+        pass
+
+    def f(self, x):
+        offset = np.max(x)
+        safe_x = x - offset
+        exp_x  = np.exp(safe_x)
+        sum_exp_x = np.sum(exp_x, axis=1).reshape((x.shape[0], 1))
+
+        return exp_x / sum_exp_x
+
+    def df(self, x):
+        raise ValueError("Softmax shouldn't be used with a derivative")
 
 class ActivationStrategy:
     def __init__(self):
@@ -33,7 +118,7 @@ class ActivationStrategy:
     def execute(self, architecture):
         raise NotImplementedError
 
-class SigmoidLinearActivationStrategy:
+class SigmoidLinearActivationStrategy(ActivationStrategy):
     def __init__(self):
         self.sigmoid = SigmoidActivation()
         self.linear = LinearActivation()
@@ -41,7 +126,16 @@ class SigmoidLinearActivationStrategy:
     def execute(self, architecture: (int)):
         length = len(architecture)
         return [self.sigmoid] * (length - 2) + [self.linear]
-        
+
+class SigmoidSoftmaxActivationStrategy(ActivationStrategy):
+    def __init__(self):
+        self.sigmoid = SigmoidActivation()
+        self.softmax = SoftmaxActivation()
+    
+    def execute(self, architecture):
+        length = len(architecture)
+        return [self.sigmoid] * (length - 2) + [self.softmax]
+
 class Initializer:
     def __init__(self):
         pass
@@ -96,9 +190,12 @@ class Layer:
             indent(f"Weights:\n{repr(self.weights)}\nBias:\n{repr(self.bias)}", "  ")
         )
 
+from typing import List
+
 class NN:
-    def __init__(self, layers):
+    def __init__(self, layers: List[Layer], loss: Loss):
         self.layers = layers
+        self.loss = loss
         
     def apply(self, inputs):
         x = inputs
@@ -121,7 +218,7 @@ class NN:
         errors = [None] * len(self.layers)
         yhat = outbound[-1]
         
-        errors[-1] = (yhat - y)
+        errors[-1] = self.loss.df(yhat, y)
         for i in range(len(errors)-2, -1, -1):
             uhm = errors[i+1] @ self.layers[i+1].weights.T
             errors[i] = self.layers[i].activation.df(inbound[i]) * uhm
@@ -172,9 +269,10 @@ class NN:
         )
 
 class NNFactory:
-    def __init__(self, activation_strategy: ActivationStrategy, layer_factory: LayerFactory):
+    def __init__(self, activation_strategy: ActivationStrategy, layer_factory: LayerFactory, loss: Loss):
         self.activation_strategy = activation_strategy
         self.layer_factory = layer_factory
+        self.loss = loss
 
     def get(self, architecture):
         layer_shapes = list(zip(architecture[:-1], architecture[1:]))
@@ -188,7 +286,7 @@ class NNFactory:
             in zip(layer_shapes, activation_types)
         ]
 
-        return NN(layers)
+        return NN(layers, self.loss)
 
 class ProgressTracker:
     def __init__(self, interval):
@@ -243,14 +341,72 @@ class TimeLossTracker(ProgressTracker):
         self.moments.append(moment)
         self.records.append(loss)
 
+class Evaluator:
+    def evaluate(self, nn, x, y):
+        pass
+
+    def plot_results(self, nn, x, y):
+        pass
+
+class SingleRegressionEvaluator(Evaluator):
+    def evaluate(self, nn, x, y):
+        return MSE(nn.apply(x), y)
+
+    def plot_results(self, nn, x, y, title, dataset):
+        print()
+        plt.scatter(
+            x, nn.apply(x)
+        )
+        plt.scatter(
+            x, y
+        )
+        plt.legend(["yhat", "y"])
+        plt.title(title + ", " + dataset)
+
+class MultiClassificationEvaluator(Evaluator):  
+    def __init__(self) -> None:
+        self.miss_color = "#ff0000"
+        self.correct_color = "#aaaaaa"
+    
+    def evaluate(self, nn, x, y):
+        return macro_f1(rohe(nn.apply(x)), rohe(y))
+
+    def plot_results(self, nn, x, y, title, dataset):
+        print(f"{title}, {dataset} F-measure (macro): {self.evaluate(nn, x, y)}")
+        yhat_org = rohe(nn.apply(x))
+        y_org = rohe(y)
+        fig, axes = plt.subplots(1, 3)
+        xi, yi = fig.get_size_inches()
+        fig.set_size_inches(xi*3, yi)
+        axes[0].scatter(x[:, 0], x[:, 1], c=yhat_org, cmap="viridis")
+        axes[0].set_title(f"{title}, {dataset}, Predict")
+        axes[1].scatter(x[:, 0], x[:, 1], c=y_org, cmap="viridis")
+        axes[1].set_title(f"{title}, {dataset}, Actual")
+        correct = y_org.flatten()==yhat_org.flatten()
+        coloration = [self.correct_color if el else self.miss_color for el in correct]
+        axes[2].scatter(x[:, 0], x[:, 1], c=coloration)
+        axes[2].set_title(f"{title}, {dataset}, Misclassified")
+
 class Trainer:
-    def __init__(self, nn: NN, x: np.array, y: np.array, x_test=None, y_test=None, tracker: ProgressTracker=None):
+    def __init__(
+            self,
+            nn: NN,
+            x: np.array, 
+            y: np.array, 
+            x_test=None, 
+            y_test=None,
+            dataset_name="", 
+            tracker: ProgressTracker=None, 
+            evaluator: Evaluator=Evaluator()
+        ):
         self.nn = nn
         self.x = x
         self.y = y     
         self.x_test = x_test
         self.y_test = y_test
+        self.dataset_name = dataset_name
         self.tracker = tracker if tracker else DummyProgressTracker()
+        self.evaluator = evaluator
 
     def apply_rate(self, grads, rate):
         return [- g * rate for g in grads]
@@ -330,20 +486,13 @@ class Trainer:
 
     def evaluate(self, dataset="train"):
         x, y = self.get_xy(dataset)
-        return MSE(self.nn.apply(x), y)
+        return self.evaluator.evaluate(self.nn, x, y)
 
-    def plot_results(self, title="", dataset="train"):
+    def plot_results(self, title=None, dataset="train"):
+        title = title if title else self.dataset_name
         x, y = self.get_xy(dataset)
-        print(self.evaluate(dataset))
-        plt.scatter(
-            x, self.nn.apply(x)
-        )
-        plt.scatter(
-            x, y
-        )
-        plt.title(title + ", " + dataset)
-        plt.legend(["yhat", "y"])
-        plt.show()
+        self.evaluator.plot_results(self.nn, x, y, title, dataset)
+        
     
     def plot_progress(self):
         print(self.evaluate("train"))
