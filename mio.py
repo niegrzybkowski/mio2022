@@ -11,8 +11,11 @@ def CCE(yhat, y):
     y_pos = np.argmax(y != 0.0, axis=1)
     return -np.mean(np.log(yhat[y_pos]))
 
-def macro_f1(yhat, y):
-    contingency_matrix = ohe(yhat).T @ ohe(y)
+def macro_f1(yhat, y, ohe_size=None):
+    yhat_ohe = ohe(yhat, ohe_size=ohe_size)
+    y_ohe = ohe(y, ohe_size=ohe_size)
+    contingency_matrix = yhat_ohe.T @ y_ohe
+    assert contingency_matrix.shape == (ohe_size, ohe_size), "incorrect shape from OHE"
     f1 = []
     for i in range(contingency_matrix.shape[0]):
         correct   = contingency_matrix[i,i]
@@ -22,13 +25,22 @@ def macro_f1(yhat, y):
         f1.append(f1_score)
     return sum(f1)/len(f1)
 
+def f1_fromohe_factory(ohe_size):
+    # correct OHE size is not known at evaluation, so we need to pass ohe_size
+    def f1_macro_ohe(yhat, y):
+        return macro_f1(rohe(yhat), rohe(y), ohe_size=ohe_size)
+    return f1_macro_ohe
+
 def ohe_one(which, length):
     out = np.zeros(shape=(length))
     out[which] = 1.0
     return out
     
-def ohe(y):
-    length = len(np.unique(y))
+def ohe(y, ohe_size=None):
+    if ohe_size:
+        length = ohe_size
+    else:
+        length = len(np.unique(y))
     return np.array([ohe_one(el, length) for el in y])
 
 def rohe(y):
@@ -111,6 +123,26 @@ class SoftmaxActivation(Activation):
     def df(self, x):
         raise ValueError("Softmax shouldn't be used with a derivative")
 
+class TanhActivation(Activation):
+    def __init__(self):
+        pass
+
+    def f(self, x):
+        return np.tanh(x)
+    
+    def df(self, x):
+        return 1 - np.tanh(x) ** 2
+
+class ReluActivation(Activation):
+    def __init__(self):
+        pass
+
+    def f(self, x):
+        return np.maximum(x, 0.0)
+
+    def df(self, x):
+        return np.where(x >= 0.0, 1.0, 0.0)
+
 class ActivationStrategy:
     def __init__(self):
         pass
@@ -135,6 +167,27 @@ class SigmoidSoftmaxActivationStrategy(ActivationStrategy):
     def execute(self, architecture):
         length = len(architecture)
         return [self.sigmoid] * (length - 2) + [self.softmax]
+
+class ActivationStrategyFactory:
+    def __init__(self):
+        pass
+    
+    def get(self):
+        raise NotImplementedError
+
+class BodyEndActivationStrategyFactory(ActivationStrategyFactory):
+    def __init__(self, body_activation:Activation, end_activation:Activation):
+        class ConcreteActivationStrategy(ActivationStrategy):
+            def __init__(self):
+                self.body = body_activation
+                self.end = end_activation
+            def execute(self, architecture):
+                length = len(architecture)
+                return [self.body] * (length - 2) + [self.end]
+        self.strategy = ConcreteActivationStrategy()
+    
+    def get(self):
+        return self.strategy
 
 class Initializer:
     def __init__(self):
